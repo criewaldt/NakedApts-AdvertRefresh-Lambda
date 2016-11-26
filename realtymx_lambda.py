@@ -12,6 +12,10 @@ from email.MIMEMultipart import MIMEMultipart
 from email.MIMEText import MIMEText
 import smtplib
 
+#globals
+TIME_LAG = 15
+HOPPER_SIZE = 10
+
 def check_post_response(response):
     # Checks response from ad post, return code and status message
     #   possible outcomes are:
@@ -47,7 +51,7 @@ class AdvertAPI(object):
 
     def Validate(self, user):
         #Set TIME_LAG interval (in minutes)
-        TIME_LAG = 15
+        
         
         #Get the service resource.
         resource = boto3.resource('dynamodb',
@@ -342,7 +346,7 @@ I cannot repost the ads you wanted because I'm only allowed to run once every 15
 def main(event, context):
     username = event['username']
     password = event['password']
-    ads = event['ads'][:5]
+    ads = event['ads'][:HOPPER_SIZE]
     
     a = AdvertAPI(username)
     if not a.status:
