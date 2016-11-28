@@ -84,7 +84,6 @@ class AdvertAPI(object):
                 self.naked_string = response['Items'][0]['naked_string']
                 
                 #update dynamodb with lambda start time
-                
                 response = table.put_item(
                    Item={
                         'username': user,
@@ -93,6 +92,7 @@ class AdvertAPI(object):
                         'naked_string': self.naked_string,
                     }
                 )
+                
                 
                 print "AdvertAPI has been authorized."
                 return True
@@ -116,9 +116,10 @@ class NakedApts(object):
             tds = soup.find_all("td", {"class":"listing"})
             self.links = {}
             for td in tds:
-                webid = td.span.text.strip("Web ID: ")
+                webid = td.span.text.split("Web ID: ")[1]
                 link =  "http://www.nakedapartments.com"+td.a['href']
                 self.links[webid] = link
+            
 
     #LOGIN
     def Login(self, username, password):
@@ -388,7 +389,6 @@ def main(event, context):
     lambda_status_email(status_list, username)
 
     print 'Lambda shutting down...'
-    sys.exit()
     
 if __name__ == "__main__":
     #
@@ -396,7 +396,7 @@ if __name__ == "__main__":
     #
     event = {'username':'aziff@nylivingsolutions.com',
         'password':'teamziff1976',
-        'ads':["NKA_NYLS_11474"]}
+        'ads':["NKA_NYLS_10880_cR_A8D"]}
     context = ""
     main(event, context)
     #
