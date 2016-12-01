@@ -11,10 +11,11 @@ import uuid
 from email.MIMEMultipart import MIMEMultipart
 from email.MIMEText import MIMEText
 import smtplib
+import time
 
 #globals
 TIME_LAG = 15
-HOPPER_SIZE = 10
+HOPPER_SIZE = 20
 
 def check_post_response(response):
     # Checks response from ad post, return code and status message
@@ -43,16 +44,31 @@ def check_post_response(response):
     else:
         print 'unknown error'
         return (False, 'unknown error')
+                
 
 class AdvertAPI(object):
 
-    def __init__(self, user):
-        self.status = self.Validate(user)
+    def __init__(self, user, forceAuth="false"):
+        self.status = self.Validate(user, forceAuth)
 
-    def Validate(self, user):
-        #Set TIME_LAG interval (in minutes)
-        
-        
+    def UpdateActivity(self, ads, status_list):
+        #Get the service resource.
+        resource = boto3.resource('dynamodb',
+            aws_access_key_id='AKIAIOZC3MKUZ2CG6VJQ',
+            aws_secret_access_key='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',
+            region_name='us-east-1')
+        #get activity table object
+        activity_table = resource.Table('advertapi-activity')
+        #update dynamodb with user activity
+        response = activity_table.put_item(
+           Item={
+                'datetime': str(datetime.datetime.utcnow()),
+                'ads': ads,
+                'status': status_list,
+            }
+        )
+
+    def Validate(self, user, forceAuth):
         #Get the service resource.
         resource = boto3.resource('dynamodb',
             aws_access_key_id='AKIAIOZC3MKUZ2CG6VJQ',
@@ -62,8 +78,9 @@ class AdvertAPI(object):
             aws_access_key_id='AKIAIOZC3MKUZ2CG6VJQ',
             aws_secret_access_key='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',
             region_name='us-east-1')
-        #get table object
+        #get user table object
         table = resource.Table('advertapi-users')
+        
         #replace '@' character
         user_email = user
         user = user.replace('@', '.....')
@@ -78,12 +95,16 @@ class AdvertAPI(object):
             timestamp = datetime.datetime.strptime(response['Items'][0]['lastrun'], "%Y-%m-%d %H:%M:%S.%f")
             now = datetime.datetime.utcnow()
             target_time = timestamp + datetime.timedelta(minutes=TIME_LAG)
+            #update dynamodb with lambda start time
+            if forceAuth == "true":
+                self.host = response['Items'][0]['host']
+                self.naked_string = response['Items'][0]['naked_string']
+                print "AdvertAPI has been authorized by force."
+                return True
             if now > target_time:
                 #AdvertAPI Validated!
                 self.host = response['Items'][0]['host']
                 self.naked_string = response['Items'][0]['naked_string']
-                
-                #update dynamodb with lambda start time
                 response = table.put_item(
                    Item={
                         'username': user,
@@ -91,9 +112,7 @@ class AdvertAPI(object):
                         'host': self.host,
                         'naked_string': self.naked_string,
                     }
-                )
-                
-                
+                )  
                 print "AdvertAPI has been authorized."
                 return True
             else:
@@ -307,7 +326,7 @@ This is the edit link: {e}\nThis is the new webID: {w}\n\n""".format(n=str(count
                                e=result[1]['edit_url'], \
                                w=result[1]['nakedid'])
         else:
-            body += """{n}) Status: Fail\nMessage: {m}\n\n""".format(n=str(counter), m=result[1])
+            body += """{n}) Status: Fail\nMessage: {m}\n\n""".format(n=str(counter), m=result[1]['msg'])
         counter += 1
     body += "Beep-boop.\n\n-AdvertAPI Bot"
 
@@ -347,9 +366,14 @@ I cannot repost the ads you wanted because I'm only allowed to run once every 15
 def main(event, context):
     username = event['username']
     password = event['password']
+    try:
+        forceAuth = event['forceAuth']
+    except KeyError:
+        forceAuth = 'false'
+        
     ads = event['ads'][:HOPPER_SIZE]
     
-    a = AdvertAPI(username)
+    a = AdvertAPI(username, forceAuth)
     if not a.status:
         print "AdvertAPI has NOT been validated."
         sys.exit()
@@ -363,7 +387,7 @@ def main(event, context):
 
     print 'Making ads now!'
     status_list = []
-    for webid in ads:
+    for webid in ads[:10]:
         try:
             #get img objects
             imgs = rx.Img_Objects(rx.Img_Links(webid))
@@ -381,7 +405,33 @@ def main(event, context):
         except KeyError as e:
             print "Couldn't find this webid:", e
             status_list.append((False, '''Couldn't find this webid: '''+str(e)))
+        except Exception as e:
+            print "EREROR: {}".format(e)
+            status_list.append((False, "{}".format(e)))
+
+        #take a nap
+        time.sleep(2)
+
+    #refire lambda with leftovers
+    if len(ads) > 10:
+        rPayload = {'ads':ads[10:],
+                    'username':username,
+                    'password':password,
+                    'forceAuth':'true'}
+        lamb = boto3.client('lambda',
+            aws_access_key_id='AKIAIOZC3MKUZ2CG6VJQ',
+            aws_secret_access_key='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',
+            region_name='us-east-1')
+        response = lamb.invoke(
+            FunctionName='AdvertAPI_RealtyMX',
+            InvocationType='Event',
+            Payload=json.dumps(rPayload))
         
+        print 'Calling myself again with', len(ads[10:]), 'more ads'
+
+    print 'Updating AdvertAPI activity log'
+    #UpdateActivity(username, ads[:10], status_list) 
+    
     print 'Done posting ads'
     na.Logout()
 
@@ -389,20 +439,42 @@ def main(event, context):
     lambda_status_email(status_list, username)
 
     print 'Lambda shutting down...'
+
+    return None
+
+def UpdateActivity(username, ads, status_list):
+    #clean username
+    username = username.replace("@", ".....")
+    #Get the service resource.
+    resource = boto3.resource('dynamodb',
+        aws_access_key_id='AKIAIOZC3MKUZ2CG6VJQ',
+        aws_secret_access_key='W2f1eHHscbJcH7lFo+jbQUzgliKH1S46Mx1xh6Ll',
+        region_name='us-east-1')
+    #get activity table object
+    activity_table = resource.Table('advertapi-activity')
+    #update dynamodb with user activity
+    response = activity_table.put_item(
+       Item={
+            'datetime': str(datetime.datetime.utcnow()),
+            'username':username,
+            'ads': ads,
+            'status': status_list,
+        }
+    )
     
 if __name__ == "__main__":
     #
     #TEST EVENT
     #
+    """
     event = {'username':'aziff@nylivingsolutions.com',
         'password':'teamziff1976',
-        'ads':["NKA_NYLS_10880_cR_A8D"]}
+        'ads':["NKA_NYLS_10339_cR_68C", "NKA_NYLS_10717_cR_EB1", "NKA_NYLS_10879_cR_C26"]}
     context = ""
-    main(event, context)
-    #
-    #
-    #
     
+    main(event, context)
+    """
+    pass
 
 
     
