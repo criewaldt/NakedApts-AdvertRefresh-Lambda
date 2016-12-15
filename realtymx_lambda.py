@@ -142,10 +142,15 @@ class NakedApts(object):
 
     #LOGIN
     def Login(self, username, password):
+        r = self.session.get("https://www.nakedapartments.com/login")
+        soup = BeautifulSoup(r.content, "html.parser")
+        _csrf = soup.find("meta", {"name":"csrf-token"})
+        csrf = _csrf.get('content')
         login_data = {'user_session[email]' : username,
-                  'user_session[password]' : password,
-                  'Referer' : 'https://www.nakedapartments.com/login'
-                  }
+                      'user_session[password]' : password,
+                      'authenticity_token' : csrf,
+                      'user_session[remember_me]' : 0,
+                      'button' : ''}
         
         r = self.session.post('https://www.nakedapartments.com/user_session', data=login_data)
         soup = BeautifulSoup(r.content, "html.parser")
