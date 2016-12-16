@@ -12,6 +12,7 @@ from email.MIMEMultipart import MIMEMultipart
 from email.MIMEText import MIMEText
 import smtplib
 import time
+from requests_toolbelt import MultipartEncoder
 
 #globals
 TIME_LAG = 15
@@ -24,7 +25,6 @@ def check_post_response(response):
     # 2) False: Failed: Missing info
     # 3) False: Failed: Already Featured
     # 4) False: Failed: other
-    
     soup = BeautifulSoup(response.text, "html.parser")
 
     #1 - check for success and return True with status
@@ -90,17 +90,19 @@ class AdvertAPI(object):
             FilterExpression=Attr('username').eq(user.lower())
         )
         count = response['Count']
-        #if record found return true
+        #if username record found
         if count >= 1:
             timestamp = datetime.datetime.strptime(response['Items'][0]['lastrun'], "%Y-%m-%d %H:%M:%S.%f")
             now = datetime.datetime.utcnow()
             target_time = timestamp + datetime.timedelta(minutes=TIME_LAG)
-            #update dynamodb with lambda start time
+            
+            #force auth
             if forceAuth == "true":
                 self.host = response['Items'][0]['host']
                 self.naked_string = response['Items'][0]['naked_string']
                 print "AdvertAPI has been authorized by force."
                 return True
+            #is valid?
             if now > target_time:
                 #AdvertAPI Validated!
                 self.host = response['Items'][0]['host']
@@ -116,8 +118,8 @@ class AdvertAPI(object):
                 print "AdvertAPI has been authorized."
                 return True
             else:
-                lambda_time_email(user_email, target_time)
-                print "You may only use this tool every {} minutes, you last used this tool at {} UTC time.".format(TIME_LAG, response['Items'][0]['lastrun'])
+                lambda_time_email(user_email, (target_time - datetime.timedelta(hours=5)))
+                print "You may only use this tool every {} minutes.".format(TIME_LAG)
                 return False
         else:
             print "No AdvertAPI user found."
@@ -236,8 +238,13 @@ class NakedApts(object):
 
     def Inactivate(self, webid):
         ad_id = self.links[webid].split("/")[5]
+        r = self.session.get("http://www.nakedapartments.com/broker/listings")
+        soup = BeautifulSoup(r.content, "html.parser")
+        _csrf = soup.find("meta", {"name":"csrf-token"})
+        csrf = _csrf.get('content')
         payload = {'a':'deactivate',
-                   'listings[]':[ad_id]}
+                   'listings[]':[ad_id],
+                   'authenticity_token' : csrf}
         r = self.session.post('http://www.nakedapartments.com/broker/listings/update_listings', data=payload)
 
     def CreateID(self,):
@@ -248,19 +255,42 @@ class NakedApts(object):
         return listing_id
 
     def UploadImages(self, imgs, ad_id):
+        r = self.session.get("http://www.nakedapartments.com/broker/listings/new?id={}".format(ad_id))
+        soup = BeautifulSoup(r.content, "html.parser")
+        _csrf = soup.find("meta", {"name":"csrf-token"})
+        csrf = _csrf.get('content')
+        counter = 0
         for img in imgs:
-            fileImages = {'listing_image':img}
-            img_url = ('http://www.nakedapartments.com/broker/listings/'+ad_id+'/images/upload_single/0')            
-            response = self.session.post(img_url, files=fileImages)
+            multipart_data = MultipartEncoder(
+            fields = (
+                ('authenticity_token', csrf),
+                ('listing_image[listing_id]', ad_id),
+                ('listing_image[primary]', '0'),
+                ('listing_image[floor_plan]', 'false'),
+                ('listing_image[images][]', (str(counter), img, 'image/gif')),
+                ))
+        
+            _headers = {"Content-Type": multipart_data.content_type,
+                        'Host': 'www.nakedapartments.com',
+                        'Origin': 'http://www.nakedapartments.com',
+                        'Referer': 'http://www.nakedapartments.com/broker/listings/new?id={}'.format(ad_id)}
+            response = self.session.post("http://www.nakedapartments.com/broker/listings/images/upload", data=multipart_data, headers=_headers)
+            counter += 1
 
     def Post(self, payload, imgs):
-
+        
+        
         ad_id = self.CreateID()
         refer_url = 'http://www.nakedapartments.com/broker/listings/new?id={}'.format(ad_id)
+        r = self.session.get(refer_url)
+        soup = BeautifulSoup(r.content, "html.parser")
+        _csrf = soup.find("meta", {"name":"csrf-token"})
+        csrf = _csrf.get('content')
         payload['Referer'] = refer_url
-        payload['listing[unique_id]'] = payload['listing[unique_id]'].split("_cR_")[0]+"_cR_{}".format(str(uuid.uuid4().get_hex().upper()[0:16])[:3])
+        payload['listing[unique_id]'] = payload['listing[unique_id]'].split("_cR_")[0]+"_cR_{}".format(str(uuid.uuid4().get_hex().upper()[0:16])[:4])
         payload['action_type'] = 'publish'
         payload['record_state'] = 'new'
+        payload['authenticity_token'] = csrf
         data_url = ('http://www.nakedapartments.com/broker/listings/'+ad_id+'/'+'save')
 
         print '--> Uploading images for:', payload['listing[unique_id]']
@@ -355,7 +385,7 @@ def lambda_time_email(username, target_time):
 
     body = """Hello,\n
 I cannot repost the ads you wanted because I'm only allowed to run once every 15 minutes.
-\nI'll be ready again at: {} UTC time.\n\n""".format(target_time)
+\nI'll be ready again at: {} EST.\n\n""".format(target_time)
     
     body += "Beep-boop.\n\n-AdvertAPI Bot"
 
@@ -371,12 +401,18 @@ I cannot repost the ads you wanted because I'm only allowed to run once every 15
 def main(event, context):
     username = event['username']
     password = event['password']
+    ads = event['ads'][:HOPPER_SIZE]
+    now_ads = ads[:5]
+    later_ads = ads[5:]
+    
+    try:
+        status_list = event['status_list']
+    except KeyError:
+        status_list = []
     try:
         forceAuth = event['forceAuth']
     except KeyError:
         forceAuth = 'false'
-        
-    ads = event['ads'][:HOPPER_SIZE]
     
     a = AdvertAPI(username, forceAuth)
     if not a.status:
@@ -391,8 +427,7 @@ def main(event, context):
     rx = RealtyMX(a.host, a.naked_string)
 
     print 'Making ads now!'
-    status_list = []
-    for webid in ads[:10]:
+    for webid in now_ads:
         try:
             #get img objects
             imgs = rx.Img_Objects(rx.Img_Links(webid))
@@ -410,19 +445,22 @@ def main(event, context):
         except KeyError as e:
             print "Couldn't find this webid:", e
             status_list.append((False, '''Couldn't find this webid: '''+str(e)))
+        
         except Exception as e:
-            print "EREROR: {}".format(e)
+            print "ERROR: {}".format(e)
             status_list.append((False, "{}".format(e)))
-
+        
         #take a nap
-        time.sleep(2)
+        time.sleep(15)
 
     #refire lambda with leftovers
-    if len(ads) > 10:
-        rPayload = {'ads':ads[10:],
+    if len(later_ads) > 0:
+        rPayload = {'ads':later_ads,
                     'username':username,
                     'password':password,
-                    'forceAuth':'true'}
+                    'forceAuth':'true',
+                    'status_list':status_list,
+                    }
         lamb = boto3.client('lambda',
             aws_access_key_id='AKIAIOZC3MKUZ2CG6VJQ',
             aws_secret_access_key='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',
@@ -432,54 +470,31 @@ def main(event, context):
             InvocationType='Event',
             Payload=json.dumps(rPayload))
         
-        print 'Calling myself again with', len(ads[10:]), 'more ads'
-
-    print 'Updating AdvertAPI activity log'
-    #UpdateActivity(username, ads[:10], status_list) 
+        print 'Calling myself again with', len(later_ads), 'more ads'
+    else:
+        print 'Final lambda iteration: Sending status email'
+        lambda_status_email(status_list, username)
     
     print 'Done posting ads'
     na.Logout()
 
-    print 'Sending email'
-    lambda_status_email(status_list, username)
-
     print 'Lambda shutting down...'
-
     return None
-
-def UpdateActivity(username, ads, status_list):
-    #clean username
-    username = username.replace("@", ".....")
-    #Get the service resource.
-    resource = boto3.resource('dynamodb',
-        aws_access_key_id='AKIAIOZC3MKUZ2CG6VJQ',
-        aws_secret_access_key='W2f1eHHscbJcH7lFo+jbQUzgliKH1S46Mx1xh6Ll',
-        region_name='us-east-1')
-    #get activity table object
-    activity_table = resource.Table('advertapi-activity')
-    #update dynamodb with user activity
-    response = activity_table.put_item(
-       Item={
-            'datetime': str(datetime.datetime.utcnow()),
-            'username':username,
-            'ads': ads,
-            'status': status_list,
-        }
-    )
     
 if __name__ == "__main__":
     #
     #TEST EVENT
     #
+    pass
     """
     event = {'username':'aziff@nylivingsolutions.com',
         'password':'teamziff1976',
-        'ads':["NKA_NYLS_10339_cR_68C", "NKA_NYLS_10717_cR_EB1", "NKA_NYLS_10879_cR_C26"]}
+        'forceAuth':'true',
+        'ads':["NKA_NYLS_9922_cR_9B9"]}
     context = ""
     
     main(event, context)
     """
-    pass
 
 
     
