@@ -14,9 +14,12 @@ import smtplib
 import time
 from requests_toolbelt import MultipartEncoder
 
+DEBUG = False
+
+
 #globals
-TIME_LAG = 15
-HOPPER_SIZE = 20
+TIME_LAG = 30
+HOPPER_SIZE = 50
 
 def check_post_response(response):
     # Checks response from ad post, return code and status message
@@ -26,6 +29,11 @@ def check_post_response(response):
     # 3) False: Failed: Already Featured
     # 4) False: Failed: other
     soup = BeautifulSoup(response.text, "html.parser")
+    if DEBUG == True:
+        dName = 'check post response'
+        with open('{}.html'.format(dName), 'w') as w:
+            w.write(response.text)
+        dName = ''
 
     #1 - check for success and return True with status
     status = soup.find("div", {"class": "success alert alert-success"})
@@ -131,14 +139,21 @@ class NakedApts(object):
         self.session.headers={'User-Agent' : 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/53.0.2785.143 Safari/537.36'}
         self.status = self.Login(username, password)
         if self.status:
-            url = "http://www.nakedapartments.com/broker/listings?all=true&listings_scope=published&order=desc&page=1"
+            url = "https://www.nakedapartments.com/broker/listings?all=true&listings_scope=published&order=desc&page=1"
             r = self.session.get(url)
             soup = BeautifulSoup(r.content, "html.parser")
+            
+            if DEBUG == True:
+                dName = 'parse all ads'
+                with open('{}.html'.format(dName), 'w') as w:
+                    w.write(r.content)
+                dName = ''
+                    
             tds = soup.find_all("td", {"class":"listing"})
             self.links = {}
             for td in tds:
                 webid = td.span.text.split("Web ID: ")[1]
-                link =  "http://www.nakedapartments.com"+td.a['href']
+                link =  "https://www.nakedapartments.com"+td.a['href']
                 self.links[webid] = link
             
 
@@ -156,6 +171,13 @@ class NakedApts(object):
         
         r = self.session.post('https://www.nakedapartments.com/user_session', data=login_data)
         soup = BeautifulSoup(r.content, "html.parser")
+
+        if DEBUG == True:
+            dName = 'login'
+            with open('{}.html'.format(dName), 'w') as w:
+                w.write(r.content)
+            dName = ''
+    
         error = soup.find("div", {"class": "error alert alert-error"})
         if error:
             if error.text == "Sorry, your email and password didn't match.":
@@ -165,13 +187,19 @@ class NakedApts(object):
             return True
     #LOGOUT
     def Logout(self,):
-        r = self.session.get('http://www.nakedapartments.com/logoff')        
+        r = self.session.get('https://www.nakedapartments.com/logoff')        
         
     def PopulatePayload(self, webid):
         
         url = self.links[webid]
         r = self.session.get(url)
         ad = r.content
+
+        if DEBUG == True:
+            dName = 'populate payload'
+            with open('{}.html'.format(dName), 'w') as w:
+                w.write(ad)
+            dName = ''
         
         soup = BeautifulSoup(ad, 'html.parser')
         ad_data = {}
@@ -238,24 +266,29 @@ class NakedApts(object):
 
     def Inactivate(self, webid):
         ad_id = self.links[webid].split("/")[5]
-        r = self.session.get("http://www.nakedapartments.com/broker/listings")
+        r = self.session.get("https://www.nakedapartments.com/broker/listings")
         soup = BeautifulSoup(r.content, "html.parser")
         _csrf = soup.find("meta", {"name":"csrf-token"})
         csrf = _csrf.get('content')
         payload = {'a':'deactivate',
                    'listings[]':[ad_id],
                    'authenticity_token' : csrf}
-        r = self.session.post('http://www.nakedapartments.com/broker/listings/update_listings', data=payload)
+        r = self.session.post('https://www.nakedapartments.com/broker/listings/update_listings', data=payload)
+        if DEBUG == True:
+            dName = 'Inactivate'
+            with open('{}.html'.format(dName), 'w') as w:
+                w.write(r.content)
+            dName = ''
 
     def CreateID(self,):
-        r = self.session.get('http://www.nakedapartments.com/broker/listings/new')
+        r = self.session.get('https://www.nakedapartments.com/broker/listings/new')
         soup = BeautifulSoup(r.content, "html.parser")
         idd = soup.find("input", {"id": "listing_unique_id"})
         listing_id = idd['value']
         return listing_id
 
     def UploadImages(self, imgs, ad_id):
-        r = self.session.get("http://www.nakedapartments.com/broker/listings/new?id={}".format(ad_id))
+        r = self.session.get("https://www.nakedapartments.com/broker/listings/new?id={}".format(ad_id))
         soup = BeautifulSoup(r.content, "html.parser")
         _csrf = soup.find("meta", {"name":"csrf-token"})
         csrf = _csrf.get('content')
@@ -267,21 +300,27 @@ class NakedApts(object):
                 ('listing_image[listing_id]', ad_id),
                 ('listing_image[primary]', '0'),
                 ('listing_image[floor_plan]', 'false'),
-                ('listing_image[images][]', (str(counter), img, 'image/gif')),
+                ('listing_image[images][]', (str(counter), img, 'image/jpeg')),
                 ))
         
             _headers = {"Content-Type": multipart_data.content_type,
                         'Host': 'www.nakedapartments.com',
-                        'Origin': 'http://www.nakedapartments.com',
-                        'Referer': 'http://www.nakedapartments.com/broker/listings/new?id={}'.format(ad_id)}
-            response = self.session.post("http://www.nakedapartments.com/broker/listings/images/upload", data=multipart_data, headers=_headers)
+                        'Origin': 'https://www.nakedapartments.com',
+                        'Referer': 'https://www.nakedapartments.com/broker/listings/new?id={}'.format(ad_id)}
+            response = self.session.post("https://www.nakedapartments.com/broker/listings/images/upload", data=multipart_data, headers=_headers)
+            if DEBUG == True:
+                dName = str(counter)
+                with open('{}.html'.format(dName), 'w') as w:
+                    w.write(response.content)
+                dName = ''
             counter += 1
+            
 
     def Post(self, payload, imgs):
         
         
         ad_id = self.CreateID()
-        refer_url = 'http://www.nakedapartments.com/broker/listings/new?id={}'.format(ad_id)
+        refer_url = 'https://www.nakedapartments.com/broker/listings/new?id={}'.format(ad_id)
         r = self.session.get(refer_url)
         soup = BeautifulSoup(r.content, "html.parser")
         _csrf = soup.find("meta", {"name":"csrf-token"})
@@ -291,18 +330,25 @@ class NakedApts(object):
         payload['action_type'] = 'publish'
         payload['record_state'] = 'new'
         payload['authenticity_token'] = csrf
-        data_url = ('http://www.nakedapartments.com/broker/listings/'+ad_id+'/'+'save')
+        data_url = ('https://www.nakedapartments.com/broker/listings/'+ad_id+'/'+'save')
 
         print '--> Uploading images for:', payload['listing[unique_id]']
         self.UploadImages(imgs, ad_id)
 
-        response = self.session.post(data_url, data=payload)        
+        response = self.session.post(data_url, data=payload)
+
+        if DEBUG == True:
+            dName = 'Post'
+            with open('{}.html'.format(dName), 'w') as w:
+                w.write(response.content)
+            dName = ''
+            
         #do something with the response
         status = check_post_response(response)
         if status[0]:
             print 'Successfully posted:', payload['listing[unique_id]']
-            pub_url = "http://www.nakedapartments.com/rental/{}".format(ad_id)
-            edit_url = "http://www.nakedapartments.com/broker/listings/{}/edit".format(ad_id)
+            pub_url = "https://www.nakedapartments.com/rental/{}".format(ad_id)
+            edit_url = "https://www.nakedapartments.com/broker/listings/{}/edit".format(ad_id)
             nakedid = payload['listing[unique_id]']
             return (True, {'msg':'ok',
                            'public_url':pub_url,
@@ -340,14 +386,40 @@ class RealtyMX(object):
                 img = response.content
                 imgs.append(img)
         return imgs
-
-def lambda_status_email(status_list, username):
-    fromaddr = "criewaldt@gmail.com"
+    
+def lambda_start_email(username, id_list):
+    fromaddr = "AdvertAPIbot@gmail.com"
     toaddr = username
     msg = MIMEMultipart()
     msg['From'] = fromaddr
     msg['To'] = username
-    msg['cc'] = 'criewaldt@gmail.com'
+    #msg['cc'] = 'criewaldt@gmail.com'
+    msg['Subject'] = "AdvertAPI-NakedApts: Reposting Has Started"
+
+    body = """Hello,\n\nI will now attempt to repost the following NakedApartment webID's:\n\n"""
+    counter = 1
+    for _id in id_list:
+        body += """{}\n""".format(_id)
+    body += "\n"
+    body += "Do not make any changes to those ads on your NakedApartments account or I will not be able to repost them.\n\nBeep-boop.\n\n-AdvertAPI Bot"
+    body += "\n\nThis email was sent at: {}.\n\n".format(datetime.datetime.utcnow() - datetime.timedelta(hours=5))
+
+    msg.attach(MIMEText(body, 'plain'))
+    server = smtplib.SMTP('smtp.gmail.com', 587)
+    server.ehlo()
+    server.starttls()
+    server.login(fromaddr, "tulqshqdakaooszh")
+    text = msg.as_string()
+    server.sendmail(fromaddr, toaddr, text)
+    server.quit()
+
+def lambda_status_email(status_list, username):
+    fromaddr = "AdvertAPIbot@gmail.com"
+    toaddr = username
+    msg = MIMEMultipart()
+    msg['From'] = fromaddr
+    msg['To'] = username
+    #msg['cc'] = 'criewaldt@gmail.com'
     msg['Subject'] = "AdvertAPI-NakedApts: Repost Update"
 
     body = """Hello,\n\nI have an update about your AdvertAPI-NakedApartments repost attempt:\n\n"""
@@ -363,37 +435,41 @@ This is the edit link: {e}\nThis is the new webID: {w}\n\n""".format(n=str(count
         else:
             body += """{n}) Status: Fail\nMessage: {m}\n\n""".format(n=str(counter), m=result[1]['msg'])
         counter += 1
+        
     body += "Beep-boop.\n\n-AdvertAPI Bot"
+    body += "\n\nThis email was sent at: {}.\n\n".format(datetime.datetime.utcnow() - datetime.timedelta(hours=5))
+
 
     msg.attach(MIMEText(body, 'plain'))
     server = smtplib.SMTP('smtp.gmail.com', 587)
     server.ehlo()
     server.starttls()
-    server.login(fromaddr, "xeqfbqexormtqzrs")
+    server.login(fromaddr, "tulqshqdakaooszh")
     text = msg.as_string()
     server.sendmail(fromaddr, toaddr, text)
     server.quit()
 
 def lambda_time_email(username, target_time):
-    fromaddr = "criewaldt@gmail.com"
+    fromaddr = "AdvertAPIbot@gmail.com"
     toaddr = username
     msg = MIMEMultipart()
     msg['From'] = fromaddr
     msg['To'] = username
-    msg['cc'] = 'criewaldt@gmail.com'
+    #msg['cc'] = 'criewaldt@gmail.com'
     msg['Subject'] = "AdvertAPI-NakedApts: Oops!"
 
     body = """Hello,\n
-I cannot repost the ads you wanted because I'm only allowed to run once every 15 minutes.
-\nI'll be ready again at: {} EST.\n\n""".format(target_time)
-    
+I cannot repost the ads you wanted because I'm only allowed to run once every {td} minutes, with a maximum of {h} ads per attempt.
+\nI'll be ready again at: {tt} EST.\n\n""".format(td=TIME_LAG, h=HOPPER_SIZE, tt=target_time)
     body += "Beep-boop.\n\n-AdvertAPI Bot"
+    body += "\n\nThis email was sent at: {}.\n\n".format(datetime.datetime.utcnow() - datetime.timedelta(hours=5))
+
 
     msg.attach(MIMEText(body, 'plain'))
     server = smtplib.SMTP('smtp.gmail.com', 587)
     server.ehlo()
     server.starttls()
-    server.login(fromaddr, "xeqfbqexormtqzrs")
+    server.login(fromaddr, "tulqshqdakaooszh")
     text = msg.as_string()
     server.sendmail(fromaddr, toaddr, text)
     server.quit()
@@ -413,6 +489,11 @@ def main(event, context):
         forceAuth = event['forceAuth']
     except KeyError:
         forceAuth = 'false'
+
+    try:
+        firststart = event['firststart']
+    except KeyError:
+        lambda_start_email(username, ads)
     
     a = AdvertAPI(username, forceAuth)
     if not a.status:
@@ -429,26 +510,30 @@ def main(event, context):
     print 'Making ads now!'
     for webid in now_ads:
         try:
-            #get img objects
-            imgs = rx.Img_Objects(rx.Img_Links(webid))
-            
-            #get ad payload
-            payload = na.PopulatePayload(webid)
-            
-            #inactivate naked ad
-            na.Inactivate(webid)
+            if webid.startswith(a.naked_string):
+                #get img objects
+                imgs = rx.Img_Objects(rx.Img_Links(webid))
+                
+                #get ad payload
+                payload = na.PopulatePayload(webid)
+                
+                #inactivate naked ad
+                na.Inactivate(webid)
 
-            #repost naked ad
-            result = na.Post(payload, imgs)
-            status_list.append(result)
+                #repost naked ad
+                result = na.Post(payload, imgs)
+                status_list.append(result)
+            else:
+                print "Cannot repost {w} as the webID does not begin with {n}".format(w=webid, n=a.naked_string)
+                status_list.append((False, {'msg':'I cannot repost {w} as the webID does not begin with: {n}'.format(w=webid, n=a.naked_string)}))
             
         except KeyError as e:
             print "Couldn't find this webid:", e
-            status_list.append((False, '''Couldn't find this webid: '''+str(e)))
+            status_list.append((False, {'msg':'''Couldn't find this webid: '''+str(e)}))
         
-        except Exception as e:
-            print "ERROR: {}".format(e)
-            status_list.append((False, "{}".format(e)))
+        #except Exception as e:
+        #    print "ERROR: {}".format(e)
+        #    status_list.append((False, "{}".format(e)))
         
         #take a nap
         time.sleep(15)
@@ -460,6 +545,7 @@ def main(event, context):
                     'password':password,
                     'forceAuth':'true',
                     'status_list':status_list,
+                    'firststart':'false'
                     }
         lamb = boto3.client('lambda',
             aws_access_key_id='AKIAIOZC3MKUZ2CG6VJQ',
@@ -474,7 +560,7 @@ def main(event, context):
     else:
         print 'Final lambda iteration: Sending status email'
         lambda_status_email(status_list, username)
-    
+        
     print 'Done posting ads'
     na.Logout()
 
@@ -490,7 +576,7 @@ if __name__ == "__main__":
     event = {'username':'aziff@nylivingsolutions.com',
         'password':'teamziff1976',
         'forceAuth':'true',
-        'ads':["NKA_NYLS_9922_cR_9B9"]}
+        'ads':["asdasd", "NKA_NYLS_13755_cR_2977", "11731384", "NKA_NYLS_13756_cR_1761"]}
     context = ""
     
     main(event, context)
