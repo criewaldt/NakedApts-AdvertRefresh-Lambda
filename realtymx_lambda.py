@@ -109,6 +109,7 @@ class AdvertAPI(object):
                 self.host = response['Items'][0]['host']
                 self.naked_string = response['Items'][0]['naked_string']
                 print "AdvertAPI has been authorized by force."
+                self.firstrun = False
                 return True
             #is valid?
             if now > target_time:
@@ -124,6 +125,7 @@ class AdvertAPI(object):
                     }
                 )  
                 print "AdvertAPI has been authorized."
+                self.firstrun = True
                 return True
             else:
                 lambda_time_email(user_email, (target_time - datetime.timedelta(hours=5)))
@@ -316,7 +318,7 @@ class NakedApts(object):
             counter += 1
             
 
-    def Post(self, payload, imgs):
+    def Post(self, payload, imgs, webid):
         
         
         ad_id = self.CreateID()
@@ -352,9 +354,11 @@ class NakedApts(object):
             nakedid = payload['listing[unique_id]']
             return (True, {'msg':'ok',
                            'public_url':pub_url,
-                     'edit_url':edit_url,
-                     'nakedid':nakedid})
-        return (False, {'msg':status[1]})
+                           'edit_url':edit_url,
+                           'nakedid':nakedid,
+                           'webid':webid})
+        return (False, {'msg':status[1],
+                        'webid':webid})
             
     
 class RealtyMX(object):
@@ -401,8 +405,8 @@ def lambda_start_email(username, id_list):
     for _id in id_list:
         body += """{}\n""".format(_id)
     body += "\n"
-    body += "Do not make any changes to those ads on your NakedApartments account or I will not be able to repost them.\n\nBeep-boop.\n\n-AdvertAPI Bot"
-    body += "\n\nThis email was sent at: {}.\n\n".format(datetime.datetime.utcnow() - datetime.timedelta(hours=5))
+    body += "Do not make any changes to these ads or I will not be able to repost them.\n\nBeep-boop.\n\n-AdvertAPI Bot"
+    body += "\n\nThis email was sent at: {} EST.\n\n".format(datetime.datetime.utcnow() - datetime.timedelta(hours=5))
 
     msg.attach(MIMEText(body, 'plain'))
     server = smtplib.SMTP('smtp.gmail.com', 587)
@@ -426,18 +430,18 @@ def lambda_status_email(status_list, username):
     counter = 1
     for result in status_list:
         if result[0]:
-            body += """{n}) Status: Success\nThis is the public link: {p}
-This is the edit link: {e}\nThis is the new webID: {w}\n\n""".format(n=str(counter),
+            body += """{n}) webID: {webid}\nStatus: Success\nThis is the public link: {p}
+This is the edit link: {e}\nThis is the new webID: {w}\n\n""".format(webid=result[1]['webid'],n=str(counter),
                                m=result[1]['msg'], \
                                p=result[1]['public_url'],\
                                e=result[1]['edit_url'], \
                                w=result[1]['nakedid'])
         else:
-            body += """{n}) Status: Fail\nMessage: {m}\n\n""".format(n=str(counter), m=result[1]['msg'])
+            body += """{n}) webID: {webid}\nStatus: Fail\nMessage: {m}\n\n""".format(webid=result[1]['webid'], n=str(counter), m=result[1]['msg'])
         counter += 1
         
     body += "Beep-boop.\n\n-AdvertAPI Bot"
-    body += "\n\nThis email was sent at: {}.\n\n".format(datetime.datetime.utcnow() - datetime.timedelta(hours=5))
+    body += "\n\nThis email was sent at: {} EST.\n\n".format(datetime.datetime.utcnow() - datetime.timedelta(hours=5))
 
 
     msg.attach(MIMEText(body, 'plain'))
@@ -459,10 +463,9 @@ def lambda_time_email(username, target_time):
     msg['Subject'] = "AdvertAPI-NakedApts: Oops!"
 
     body = """Hello,\n
-I cannot repost the ads you wanted because I'm only allowed to run once every {td} minutes, with a maximum of {h} ads per attempt.
-\nI'll be ready again at: {tt} EST.\n\n""".format(td=TIME_LAG, h=HOPPER_SIZE, tt=target_time)
+I cannot repost the ads you wanted because I'm only allowed to run once every {td} minutes, with a maximum of {h} ads per attempt. I'll be ready again at: {tt} EST.\n\n""".format(td=TIME_LAG, h=HOPPER_SIZE, tt=target_time)
     body += "Beep-boop.\n\n-AdvertAPI Bot"
-    body += "\n\nThis email was sent at: {}.\n\n".format(datetime.datetime.utcnow() - datetime.timedelta(hours=5))
+    body += "\n\nThis email was sent at: {} EST.\n\n".format(datetime.datetime.utcnow() - datetime.timedelta(hours=5))
 
 
     msg.attach(MIMEText(body, 'plain'))
@@ -489,16 +492,14 @@ def main(event, context):
         forceAuth = event['forceAuth']
     except KeyError:
         forceAuth = 'false'
-
-    try:
-        firststart = event['firststart']
-    except KeyError:
-        lambda_start_email(username, ads)
     
     a = AdvertAPI(username, forceAuth)
     if not a.status:
         print "AdvertAPI has NOT been validated."
         sys.exit()
+
+    if a.firstrun:
+        lambda_start_email(username, ads)
 
     na = NakedApts(username, password)
     if not na.status:
@@ -521,15 +522,17 @@ def main(event, context):
                 na.Inactivate(webid)
 
                 #repost naked ad
-                result = na.Post(payload, imgs)
+                result = na.Post(payload, imgs, webid)
                 status_list.append(result)
             else:
                 print "Cannot repost {w} as the webID does not begin with {n}".format(w=webid, n=a.naked_string)
-                status_list.append((False, {'msg':'I cannot repost {w} as the webID does not begin with: {n}'.format(w=webid, n=a.naked_string)}))
+                status_list.append((False, {'msg':'I cannot repost {w} as the webID does not begin with: {n}'.format(w=webid, n=a.naked_string),
+                                            'webid':webid}))
             
         except KeyError as e:
             print "Couldn't find this webid:", e
-            status_list.append((False, {'msg':'''Couldn't find this webid: '''+str(e)}))
+            status_list.append((False, {'msg':'''Couldn't find this webid''',
+                                        'webid':webid}))
         
         #except Exception as e:
         #    print "ERROR: {}".format(e)
@@ -571,17 +574,16 @@ if __name__ == "__main__":
     #
     #TEST EVENT
     #
-    pass
     """
     event = {'username':'aziff@nylivingsolutions.com',
         'password':'teamziff1976',
-        'forceAuth':'true',
-        'ads':["asdasd", "NKA_NYLS_13755_cR_2977", "11731384", "NKA_NYLS_13756_cR_1761"]}
+        #'forceAuth':'true',
+        'ads':["NKA_NYLS_12537_cR_9018", "asdasds"]}
     context = ""
     
     main(event, context)
     """
-
+    pass
 
     
 
